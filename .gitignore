@@ -205,3 +205,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# PROMPTHEUS specific
+email_log.jsonl
+
+# ChromaDB local database
+chroma/
+.chroma/
+
+# FastEmbed model cache (downloads locally, no need to commit)
+fastembed_cache/
+.fastembed_cache/
+
+# Scan results and reports (generated files, not source)
+reports/
+*.pdf
+scan_results/
+report.json
+
+# Demo target virtual environment
+demo_target/venv/
+
+# Mac garbage
+.DS_Store

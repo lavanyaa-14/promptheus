@@ -71,12 +71,14 @@ class PromptheusRunner:
             endpoint=endpoint
         )
 
-    def run(self, category: str = None) -> list[AttackResult]:
+    def run(self, category: str = None,
+            use_judge: bool = True) -> list[AttackResult]:
         payloads = self.load_payloads(category)
 
         console.print(f"\n[bold red]PROMPTHEUS[/bold red] — LLM Red Team Framework")
         console.print(f"[dim]Target: {self.adapter.base_url}[/dim]")
-        console.print(f"[dim]Payloads loaded: {len(payloads)}[/dim]\n")
+        console.print(f"[dim]Payloads loaded: {len(payloads)}[/dim]")
+        console.print(f"[dim]AI judge: {'enabled' if use_judge else 'disabled'}[/dim]\n")
 
         with Progress(
             SpinnerColumn(),
@@ -97,6 +99,13 @@ class PromptheusRunner:
                 time.sleep(self.delay)
                 progress.advance(task)
 
+        # Phase 3 — run AI judge on all results
+        if use_judge:
+            from promptheus.judge import JudgeEngine
+            judge = JudgeEngine()
+            console.print("\n[bold]Phase 2 complete — starting AI judge...[/bold]")
+            judge.evaluate_batch(self.results, verbose=True)
+
         self._print_summary()
         self._save_results()
         return self.results
@@ -106,33 +115,55 @@ class PromptheusRunner:
 
         table = Table(show_header=True, header_style="bold")
         table.add_column("ID",       style="dim",    width=8)
-        table.add_column("Name",                     width=30)
+        table.add_column("Name",                     width=28)
         table.add_column("Category", style="cyan",   width=8)
         table.add_column("Severity", style="yellow", width=10)
-        table.add_column("Result",                   width=10)
+        table.add_column("Raw",                      width=6)
+        table.add_column("Judge",                    width=10)
+        table.add_column("Conf",                     width=6)
 
         success_count = 0
+        partial_count = 0
+
         for r in self.results:
-            if r.raw_success:
-                result_str = "[bold red]HIT[/bold red]"
+            raw_str = "[red]HIT[/red]" if r.raw_success else "[green]MISS[/green]"
+
+            if r.judge_verdict == "success":
+                judge_str = "[bold red]SUCCESS[/bold red]"
                 success_count += 1
+            elif r.judge_verdict == "partial":
+                judge_str = "[yellow]PARTIAL[/yellow]"
+                partial_count += 1
+            elif r.judge_verdict == "failure":
+                judge_str = "[green]FAILURE[/green]"
+            elif r.judge_verdict == "error":
+                judge_str = "[dim]ERROR[/dim]"
             else:
-                result_str = "[green]MISS[/green]"
+                judge_str = "[dim]—[/dim]"
+
+            conf_str = (f"{r.judge_confidence:.2f}"
+                        if r.judge_confidence is not None else "—")
 
             table.add_row(
                 r.payload_id,
-                r.name[:30],
+                r.name[:28],
                 r.category,
                 r.severity,
-                result_str
+                raw_str,
+                judge_str,
+                conf_str
             )
 
         console.print(table)
+
+        total = len(self.results)
+        failure_count = total - success_count - partial_count
         console.print(
-            f"\n[bold]Results:[/bold] "
-            f"[red]{success_count} hits[/red] / "
-            f"[green]{len(self.results) - success_count} misses[/green] "
-            f"out of {len(self.results)} total attacks\n"
+            f"\n[bold]Judge results:[/bold] "
+            f"[red]{success_count} success[/red] · "
+            f"[yellow]{partial_count} partial[/yellow] · "
+            f"[green]{failure_count} failure[/green] "
+            f"out of {total} total\n"
         )
 
     def _save_results(self):

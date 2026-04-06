@@ -1,5 +1,9 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import os
 import json
+import time
 from groq import Groq
 from dotenv import load_dotenv
 from promptheus.models import AttackResult
@@ -57,61 +61,98 @@ Respond ONLY with valid JSON in exactly this format with no extra text:
 
 
 class JudgeEngine:
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "llama-3.1-8b-instant"):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         self.model = model
         self.total_calls = 0
         self.failed_calls = 0
 
     def evaluate(self, result: AttackResult) -> AttackResult:
+        # Truncate long responses to save tokens
+        response_text = result.response
+        if len(response_text) > 800:
+            response_text = response_text[:800] + "... [truncated]"
+
         prompt = JUDGE_PROMPT.format(
             category=result.category,
             attack_goal=result.attack_goal,
             prompt=result.prompt,
-            response=result.response
+            response=response_text
         )
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0  # deterministic judgments
-            )
-            self.total_calls += 1
+        max_retries = 3
+        retry_delays = [15, 30, 60]
 
-            raw = response.choices[0].message.content.strip()
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    temperature=0
+                )
+                self.total_calls += 1
 
-            # Strip markdown code blocks if model wraps response
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            raw = raw.strip()
+                raw = response.choices[0].message.content.strip()
 
-            verdict = json.loads(raw)
+                # Strip markdown code blocks if model wraps response
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                raw = raw.strip()
 
-            result.judge_verdict    = verdict.get("verdict", "failure")
-            result.judge_confidence = float(verdict.get("confidence", 0.0))
-            result.judge_evidence   = verdict.get("evidence", "")
-            result.judge_notes      = verdict.get("notes", "")
-            result.judge_goal       = verdict.get("attack_goal_achieved", False)
+                verdict = json.loads(raw)
 
-        except json.JSONDecodeError:
-            self.failed_calls += 1
-            result.judge_verdict    = "error"
-            result.judge_confidence = 0.0
-            result.judge_evidence   = "Judge returned invalid JSON"
-            result.judge_notes      = raw if "raw" in dir() else "No response"
-            result.judge_goal       = False
+                result.judge_verdict    = verdict.get("verdict", "failure")
+                result.judge_confidence = float(verdict.get("confidence", 0.0))
+                result.judge_evidence   = verdict.get("evidence", "")
+                result.judge_notes      = verdict.get("notes", "")
+                result.judge_goal       = verdict.get("attack_goal_achieved", False)
+                return result
 
-        except Exception as e:
-            self.failed_calls += 1
-            result.judge_verdict    = "error"
-            result.judge_confidence = 0.0
-            result.judge_evidence   = f"Judge call failed: {str(e)}"
-            result.judge_notes      = ""
-            result.judge_goal       = False
+            except Exception as e:
+                error_str = str(e)
+
+                # Rate limit — wait and retry
+                if "429" in error_str or "rate_limit" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait = retry_delays[attempt]
+                        from rich.console import Console
+                        Console().print(
+                            f"  [yellow]Rate limit hit — waiting {wait}s "
+                            f"before retry {attempt + 2}/{max_retries}...[/yellow]"
+                        )
+                        time.sleep(wait)
+                        continue
+                    else:
+                        self.failed_calls += 1
+                        result.judge_verdict    = "error"
+                        result.judge_confidence = 0.0
+                        result.judge_evidence   = "Rate limit exceeded after all retries"
+                        result.judge_notes      = ""
+                        result.judge_goal       = False
+                        return result
+
+                # JSON parse error
+                elif isinstance(e, json.JSONDecodeError):
+                    self.failed_calls += 1
+                    result.judge_verdict    = "error"
+                    result.judge_confidence = 0.0
+                    result.judge_evidence   = "Judge returned invalid JSON"
+                    result.judge_notes      = ""
+                    result.judge_goal       = False
+                    return result
+
+                # Any other error
+                else:
+                    self.failed_calls += 1
+                    result.judge_verdict    = "error"
+                    result.judge_confidence = 0.0
+                    result.judge_evidence   = f"Judge call failed: {error_str[:100]}"
+                    result.judge_notes      = ""
+                    result.judge_goal       = False
+                    return result
 
         return result
 
@@ -131,6 +172,7 @@ class JudgeEngine:
             )
 
             for result in results:
+                # Skip results where target was unreachable
                 if result.response.startswith("ERROR:"):
                     result.judge_verdict    = "error"
                     result.judge_confidence = 0.0
@@ -142,8 +184,10 @@ class JudgeEngine:
 
                 progress.update(
                     task,
-                    description=f"Judging [cyan]{result.payload_id}[/cyan] — {result.name[:30]}"
+                    description=f"Judging [cyan]{result.payload_id}[/cyan] "
+                                f"— {result.name[:30]}"
                 )
+
                 self.evaluate(result)
 
                 if verbose:

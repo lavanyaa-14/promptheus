@@ -76,7 +76,7 @@ def chat():
     messages.extend(history)
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=messages,
         max_tokens=500
     )
@@ -141,7 +141,7 @@ def agent():
     ]
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=messages,
         tools=tools,
         tool_choice="auto"
@@ -180,7 +180,7 @@ def agent():
             })
 
         final = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=messages
         )
         final_text = final.choices[0].message.content

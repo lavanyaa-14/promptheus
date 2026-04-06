@@ -99,7 +99,6 @@ class PromptheusRunner:
                 time.sleep(self.delay)
                 progress.advance(task)
 
-        # Phase 3 — run AI judge on all results
         if use_judge:
             from promptheus.judge import JudgeEngine
             judge = JudgeEngine()
@@ -167,6 +166,10 @@ class PromptheusRunner:
         )
 
     def _save_results(self):
+        from promptheus.scorer import OWASPScorer
+        from promptheus.reporter import generate_report
+        from datetime import datetime
+
         output_dir = Path("scan_results")
         output_dir.mkdir(exist_ok=True)
 
@@ -179,8 +182,20 @@ class PromptheusRunner:
                 f,
                 indent=2
             )
-
         console.print(f"[dim]Results saved to {output_file}[/dim]")
+
+        scorer = OWASPScorer()
+        report = scorer.score(
+            self.results,
+            timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        )
+        scorer.print_summary(report)
+
+        pdf_path = generate_report(
+            report,
+            target_url=self.adapter.base_url
+        )
+        console.print(f"[bold green]Report saved to {pdf_path}[/bold green]")
 
 
 if __name__ == "__main__":

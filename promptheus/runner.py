@@ -203,3 +203,9 @@ if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5000"
     runner = PromptheusRunner(target_url=target, delay=0.5)
     runner.run()
+    
+def main():
+    import sys
+    target = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5000"
+    runner = PromptheusRunner(target_url=target, delay=0.5)
+    runner.run()

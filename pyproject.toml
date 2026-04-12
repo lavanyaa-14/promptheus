@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "promptheus"
+version = "0.1.0"
+description = "Automated LLM red-teaming framework — fires attacks, judges results, generates OWASP reports"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["llm", "security", "red-team", "owasp", "prompt-injection", "ai-security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "rich>=13.0",
+    "groq>=1.0",
+    "python-dotenv>=1.0",
+    "reportlab>=4.0",
+    "flask>=3.0",
+    "flask-cors>=4.0",
+]
+
+[project.scripts]
+promptheus = "promptheus.runner:main"
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/promptheus"
+Repository = "https://github.com/YOUR_USERNAME/promptheus"
+Issues = "https://github.com/YOUR_USERNAME/promptheus/issues"
+
+[tool.setuptools.packages.find]
+include = ["promptheus*"]

@@ -1,0 +1,155 @@
+name: PROMPTHEUS LLM Security Scan
+
+on:
+  pull_request:
+    paths:
+      - 'demo_target/**'
+      - 'promptheus/**'
+      - 'payloads/**'
+
+jobs:
+  llm-security-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PROMPTHEUS dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install demo target dependencies
+        run: |
+          pip install -r demo_target/requirements.txt
+
+      - name: Start AriaCorp demo target
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FLASK_SECRET_KEY: ${{ secrets.FLASK_SECRET_KEY }}
+        run: |
+          cd demo_target
+          python app.py &
+          sleep 5
+          echo "AriaCorp started"
+
+      - name: Wait for target to be ready
+        run: |
+          for i in {1..10}; do
+            curl -sf http://localhost:5000/ && break
+            echo "Waiting for AriaCorp... ($i)"
+            sleep 3
+          done
+
+      - name: Run PROMPTHEUS scan
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python -m promptheus.runner http://localhost:5000 2>&1 | tee scan_output.txt
+          echo "Scan complete"
+
+      - name: Parse results
+        id: parse
+        run: |
+          python -c "
+          import json
+          from pathlib import Path
+
+          files = sorted(Path('scan_results').glob('*.json'))
+          if not files:
+              print('No scan results found')
+              exit(1)
+
+          results = json.loads(files[-1].read_text())
+
+          from promptheus.scorer import OWASPScorer
+          from promptheus.models import AttackResult
+
+          attack_results = []
+          for r in results:
+              ar = AttackResult(**{k: v for k, v in r.items()
+                                  if k in AttackResult.__dataclass_fields__})
+              attack_results.append(ar)
+
+          scorer = OWASPScorer()
+          report = scorer.score(attack_results)
+
+          print(f'SCORE={report.overall_score}')
+          print(f'RISK={report.risk_level}')
+          print(f'SUCCESS={report.total_success}')
+          print(f'PARTIAL={report.total_partial}')
+          print(f'CRITICAL={len(report.critical_findings)}')
+
+          with open('scan_summary.txt', 'w') as f:
+              f.write(f'score={report.overall_score}\n')
+              f.write(f'risk={report.risk_level}\n')
+              f.write(f'success={report.total_success}\n')
+              f.write(f'partial={report.total_partial}\n')
+              f.write(f'critical={len(report.critical_findings)}\n')
+          "
+
+          while IFS='=' read -r key value; do
+            echo "$key=$value" >> $GITHUB_OUTPUT
+          done < scan_summary.txt
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score    = '${{ steps.parse.outputs.score }}'
+            const risk     = '${{ steps.parse.outputs.risk }}'
+            const success  = '${{ steps.parse.outputs.success }}'
+            const partial  = '${{ steps.parse.outputs.partial }}'
+            const critical = '${{ steps.parse.outputs.critical }}'
+
+            const emoji = parseFloat(score) >= 80 ? '✅'
+                        : parseFloat(score) >= 60 ? '⚠️'
+                        : '🚨'
+
+            const body = `## ${emoji} PROMPTHEUS LLM Security Scan
+
+            | Metric | Value |
+            |--------|-------|
+            | **Posture Score** | **${score} / 100** |
+            | **Risk Level** | **${risk} RISK** |
+            | Successful attacks | ${success} |
+            | Partial successes | ${partial} |
+            | Critical findings | ${critical} |
+
+            ${parseInt(critical) > 0
+              ? '> 🚨 **Critical vulnerabilities found. Review required before merging.**'
+              : '> ✅ No critical findings. Safe to merge pending review.'
+            }
+
+            _Scanned by [PROMPTHEUS](https://github.com/${{ github.repository }}) — automated LLM red-teaming_`
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })
+
+      - name: Fail on critical findings
+        run: |
+          CRITICAL=${{ steps.parse.outputs.critical }}
+          if [ "$CRITICAL" -gt "0" ]; then
+            echo "Build failed: $CRITICAL critical LLM vulnerabilities found"
+            exit 1
+          fi
+          echo "No critical findings — build passed"
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: promptheus-scan-results
+          path: |
+            scan_results/
+            reports/
